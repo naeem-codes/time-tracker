@@ -9,7 +9,7 @@
     "dev:api": "pnpm --filter api dev",
     "dev:web": "pnpm --filter admin dev",
     "dev:admin": "pnpm --filter admin dev",
-    "dev:desktop": "pnpm --filter desktop dev"
+    "dev:desktop": "pnpm --filter nexttracking-desktop dev"
   },
   "keywords": [],
   "author": "",

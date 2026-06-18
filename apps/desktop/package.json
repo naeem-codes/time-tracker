@@ -1,7 +1,7 @@
 {
-  "name": "desktop",
+  "name": "nexttracking-desktop",
   "version": "1.0.0",
-  "description": "An Electron application with React and TypeScript",
+  "description": "Next Tracking desktop application",
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",

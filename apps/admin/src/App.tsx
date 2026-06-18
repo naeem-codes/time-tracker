@@ -160,8 +160,8 @@ function Shell({
         <div className="brand">
           <img src={logo} alt="N" />
           <div>
-            <strong>N Time</strong>
-            <span>{role === "ADMIN" ? "Admin portal" : "Employee portal"}</span>
+            <strong>Next Tracking</strong>
+            <span>{role === "ADMIN" ? "Next Tracking Admin" : "Next Tracking Employee"}</span>
           </div>
         </div>
         <nav>

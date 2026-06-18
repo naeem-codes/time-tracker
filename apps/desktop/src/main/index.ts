@@ -603,6 +603,10 @@ function createWindow(): void {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(icon)
+  }
+
   actionQueue = new TimerActionQueue(join(app.getPath('userData'), 'tracker.sqlite'))
 
   // Set app user model id for windows
