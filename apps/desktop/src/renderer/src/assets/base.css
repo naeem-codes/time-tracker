@@ -1,0 +1,58 @@
+:root {
+  --ink: #15263a;
+  --muted: #708095;
+  --line: rgba(45, 106, 160, 0.13);
+  --surface: rgba(255, 255, 255, 0.86);
+  --primary: #3981c3;
+  --primary-dark: #2869a5;
+  --primary-soft: #e3f0fb;
+  --accent: #25b5ae;
+  --accent-dark: #15958f;
+  --accent-soft: #dcf6f4;
+  --background: #f3f8fc;
+  --danger: #e66c70;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  font-weight: normal;
+}
+
+ul {
+  list-style: none;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--ink);
+  background: var(--background);
+  line-height: 1.6;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    'Fira Sans',
+    'Droid Sans',
+    'Helvetica Neue',
+    sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 0;
+}

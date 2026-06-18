@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  EMPLOYEE
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  passwordHash  String
+  role          Role           @default(EMPLOYEE)
+  timezone      String         @default("UTC")
+  workDays      WorkDay[]
+  screenshots   Screenshot[]
+  refreshTokens RefreshToken[]
+  createdAt     DateTime       @default(now())
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+}
+
+model WorkDay {
+  id                 String       @id @default(uuid())
+  userId             String
+  workDate           String
+  accumulatedSeconds Int          @default(0)
+  activeStartedAt    DateTime?
+  user               User         @relation(fields: [userId], references: [id])
+  screenshots        Screenshot[]
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@unique([userId, workDate])
+}
+
+model Screenshot {
+  id         String   @id @default(uuid())
+  userId     String
+  workDayId  String
+  s3Key      String   @unique
+  capturedAt DateTime
+  user       User     @relation(fields: [userId], references: [id])
+  workDay    WorkDay  @relation(fields: [workDayId], references: [id])
+  createdAt  DateTime @default(now())
+}
