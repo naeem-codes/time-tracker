@@ -86,6 +86,27 @@ function quickFilterForDate(date: string): QuickDateFilter {
   return "custom";
 }
 
+function readViewFromUrl(): DashboardView {
+  if (typeof window === "undefined") return "overview";
+
+  const view = new URLSearchParams(window.location.search).get("view");
+  return view === "screenshots" ? "screenshots" : "overview";
+}
+
+function writeViewToUrl(view: DashboardView): void {
+  if (typeof window === "undefined") return;
+
+  const url = new URL(window.location.href);
+
+  if (view === "overview") {
+    url.searchParams.delete("view");
+  } else {
+    url.searchParams.set("view", view);
+  }
+
+  window.history.replaceState({}, "", url);
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof TypeError) {
     return "Unable to connect to the server. Check that the API is running.";
@@ -353,7 +374,7 @@ function EmployeeDashboard({
   user: CurrentUser;
   onLogout: () => void;
 }): React.JSX.Element {
-  const [view, setView] = useState<DashboardView>("overview");
+  const [view, setView] = useState<DashboardView>(() => readViewFromUrl());
   const [workDays, setWorkDays] = useState<WorkDay[]>([]);
   const [selectedDate, setSelectedDate] = useState(localDate);
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
@@ -389,6 +410,10 @@ function EmployeeDashboard({
         setNextScreenshotCursor(null);
       });
   }, [selectedDate]);
+
+  useEffect(() => {
+    writeViewToUrl(view);
+  }, [view]);
 
   async function loadMoreScreenshots(): Promise<void> {
     if (!nextScreenshotCursor) return;
@@ -547,7 +572,7 @@ function AdminDashboard({
   user: CurrentUser;
   onLogout: () => void;
 }): React.JSX.Element {
-  const [view, setView] = useState<DashboardView>("overview");
+  const [view, setView] = useState<DashboardView>(() => readViewFromUrl());
   const [date, setDate] = useState(localDate);
   const [users, setUsers] = useState<User[]>([]);
   const [timeRows, setTimeRows] = useState<TimeRow[]>([]);
@@ -602,6 +627,10 @@ function AdminDashboard({
         setNextScreenshotCursor(null);
       });
   }, [selectedUserId, date]);
+
+  useEffect(() => {
+    writeViewToUrl(view);
+  }, [view]);
 
   async function loadMoreScreenshots(): Promise<void> {
     if (!selectedUserId || !nextScreenshotCursor) return;
