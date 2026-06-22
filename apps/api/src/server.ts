@@ -305,13 +305,13 @@ function setRefreshCookie(
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
-    path: "/auth",
+    path: "/",
     maxAge: Math.floor(refreshTokenLifetimeMs / 1000),
   });
 }
 
 function clearRefreshCookie(reply: any, client: ClientType): void {
-  reply.clearCookie(refreshCookieName(client), { path: "/auth" });
+  reply.clearCookie(refreshCookieName(client), { path: "/" });
 }
 
 function authResponse(
