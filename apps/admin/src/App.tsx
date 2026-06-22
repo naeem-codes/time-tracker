@@ -141,14 +141,18 @@ async function apiRequest<T>(
   options?: RequestInit,
   retry = true,
 ): Promise<T> {
+  const headers = new Headers(options?.headers);
+
+  if (!headers.has("Content-Type") && options?.body) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  headers.set("Authorization", `Bearer ${accessToken}`);
+
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-      ...options?.headers,
-    },
+    headers,
   });
   const body = await response.json().catch(() => null);
 
