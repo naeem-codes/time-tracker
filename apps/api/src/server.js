@@ -5,7 +5,7 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client, } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { PrismaClient, Role } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -211,12 +211,12 @@ function setRefreshCookie(reply, refreshToken, client) {
         httpOnly: true,
         sameSite: "lax",
         secure: process.env.NODE_ENV === "production",
-        path: "/auth",
+        path: "/",
         maxAge: Math.floor(refreshTokenLifetimeMs / 1000),
     });
 }
 function clearRefreshCookie(reply, client) {
-    reply.clearCookie(refreshCookieName(client), { path: "/auth" });
+    reply.clearCookie(refreshCookieName(client), { path: "/" });
 }
 function authResponse(user, accessToken, refreshToken) {
     return {
@@ -270,6 +270,74 @@ const screenshotQuerySchema = z.object({
     limit: z.coerce.number().int().min(1).max(50).default(12),
     before: z.string().datetime({ offset: true }).optional(),
 });
+const screenshotPenaltySeconds = 10 * 60;
+async function deleteScreenshotAndApplyPenalty(screenshotId, userId) {
+    const screenshot = await prisma.screenshot.findFirst({
+        where: { id: screenshotId, userId },
+        select: {
+            id: true,
+            s3Key: true,
+            workDayId: true,
+        },
+    });
+    if (!screenshot) {
+        throw app.httpErrors.notFound("Screenshot not found");
+    }
+    if (s3 && screenshotsBucket) {
+        await s3.send(new DeleteObjectCommand({
+            Bucket: screenshotsBucket,
+            Key: screenshot.s3Key,
+        }));
+    }
+    await prisma.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw `
+      SELECT
+        id,
+        "accumulatedSeconds",
+        "activeStartedAt"
+      FROM "WorkDay"
+      WHERE id = ${screenshot.workDayId}
+      FOR UPDATE
+    `;
+        const workDay = rows[0];
+        if (!workDay) {
+            throw app.httpErrors.notFound("Work day not found");
+        }
+        await tx.screenshot.delete({
+            where: { id: screenshot.id },
+        });
+        if (!workDay.activeStartedAt) {
+            await tx.workDay.update({
+                where: { id: workDay.id },
+                data: {
+                    accumulatedSeconds: Math.max(0, workDay.accumulatedSeconds - screenshotPenaltySeconds),
+                },
+            });
+            return;
+        }
+        const now = new Date();
+        const activeSeconds = Math.max(0, Math.floor((now.getTime() - workDay.activeStartedAt.getTime()) / 1000));
+        if (workDay.accumulatedSeconds >= screenshotPenaltySeconds) {
+            await tx.workDay.update({
+                where: { id: workDay.id },
+                data: {
+                    accumulatedSeconds: workDay.accumulatedSeconds - screenshotPenaltySeconds,
+                },
+            });
+            return;
+        }
+        const remainingPenalty = screenshotPenaltySeconds - workDay.accumulatedSeconds;
+        const adjustedActiveSeconds = Math.max(0, activeSeconds - remainingPenalty);
+        const adjustedStartedAt = new Date(now.getTime() - adjustedActiveSeconds * 1000);
+        await tx.workDay.update({
+            where: { id: workDay.id },
+            data: {
+                accumulatedSeconds: 0,
+                activeStartedAt: adjustedStartedAt,
+            },
+        });
+    });
+}
 app.get("/health", async () => ({ status: "ok" }));
 app.post("/auth/login", {
     config: {
@@ -570,6 +638,11 @@ app.post("/me/screenshots", {
         },
     });
     return reply.code(201).send(await serializeScreenshot(screenshot));
+});
+app.delete("/me/screenshots/:id", { preHandler: app.authenticate }, async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    await deleteScreenshotAndApplyPenalty(params.id, request.user.userId);
+    return reply.code(204).send();
 });
 app.get("/admin/users", { preHandler: authorizeAdmin }, async () => {
     return prisma.user.findMany({

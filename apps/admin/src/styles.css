@@ -557,6 +557,10 @@ button.table-row:hover,
   font-weight: 700;
   text-decoration: none;
 }
+.danger-button {
+  border-color: rgba(191, 71, 77, 0.18);
+  color: #bf474d;
+}
 
 .modal-backdrop {
   position: fixed;

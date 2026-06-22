@@ -219,9 +219,13 @@ function Shell({
 function ScreenshotModal({
   screenshot,
   onClose,
+  onDelete,
+  deleting,
 }: {
   screenshot: Screenshot | null;
   onClose: () => void;
+  onDelete?: (screenshot: Screenshot) => void;
+  deleting?: boolean;
 }): React.JSX.Element | null {
   if (!screenshot?.previewUrl) return null;
 
@@ -249,6 +253,16 @@ function ScreenshotModal({
             >
               Download
             </a>
+            {onDelete && (
+              <button
+                className="ghost-button danger-button"
+                disabled={deleting}
+                onClick={() => onDelete(screenshot)}
+                type="button"
+              >
+                {deleting ? "Deleting..." : "Delete screenshot"}
+              </button>
+            )}
             <button className="ghost-button" onClick={onClose} type="button">
               Close
             </button>
@@ -381,18 +395,21 @@ function EmployeeDashboard({
   const [nextScreenshotCursor, setNextScreenshotCursor] = useState<string | null>(null);
   const [loadingMoreScreenshots, setLoadingMoreScreenshots] = useState(false);
   const [activeScreenshot, setActiveScreenshot] = useState<Screenshot | null>(null);
+  const [deletingScreenshotId, setDeletingScreenshotId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  async function loadWorkDays(preferredDate?: string): Promise<void> {
+    const rows = await apiRequest<WorkDay[]>(
+      `/me/work-days?from=${daysAgo(29)}&to=${localDate()}`,
+    );
+    setWorkDays(rows);
+    setSelectedDate(preferredDate ?? rows[0]?.workDate ?? localDate());
+  }
+
   useEffect(() => {
     setLoading(true);
-    void apiRequest<WorkDay[]>(
-      `/me/work-days?from=${daysAgo(29)}&to=${localDate()}`,
-    )
-      .then((rows) => {
-        setWorkDays(rows);
-        setSelectedDate(rows[0]?.workDate ?? localDate());
-      })
+    void loadWorkDays()
       .catch((caught) =>
         setError(errorMessage(caught, "Unable to load your work logs.")),
       )
@@ -429,6 +446,38 @@ function EmployeeDashboard({
       setNextScreenshotCursor(page.nextCursor);
     } finally {
       setLoadingMoreScreenshots(false);
+    }
+  }
+
+  async function deleteScreenshot(screenshot: Screenshot): Promise<void> {
+    if (
+      !window.confirm(
+        "Delete this screenshot? It will also deduct 10 minutes from your tracked time for that day.",
+      )
+    ) {
+      return;
+    }
+
+    setDeletingScreenshotId(screenshot.id);
+
+    try {
+      await apiRequest<void>(`/me/screenshots/${screenshot.id}`, {
+        method: "DELETE",
+      });
+      setActiveScreenshot(null);
+      await Promise.all([
+        loadWorkDays(selectedDate),
+        fetchScreenshotPage(`/me/screenshots?date=${selectedDate}`).then((page) => {
+          setScreenshots(page.items);
+          setNextScreenshotCursor(page.nextCursor);
+        }),
+      ]);
+    } catch (caught) {
+      setError(
+        errorMessage(caught, "Unable to delete the screenshot right now."),
+      );
+    } finally {
+      setDeletingScreenshotId(null);
     }
   }
 
@@ -559,6 +608,10 @@ function EmployeeDashboard({
       </main>
       <ScreenshotModal
         onClose={() => setActiveScreenshot(null)}
+        onDelete={deleteScreenshot}
+        deleting={Boolean(
+          activeScreenshot && deletingScreenshotId === activeScreenshot.id,
+        )}
         screenshot={activeScreenshot}
       />
     </Shell>
