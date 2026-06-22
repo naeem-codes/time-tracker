@@ -65,6 +65,11 @@ interface TimerState {
   updatedAt: string
 }
 
+function localWorkDate(timestamp: Date): string {
+  const offset = timestamp.getTimezoneOffset() * 60_000
+  return new Date(timestamp.getTime() - offset).toISOString().slice(0, 10)
+}
+
 function friendlyError(
   error: unknown,
   fallback = 'Something went wrong. Please try again.'
@@ -126,7 +131,18 @@ async function clearStoredAuth(): Promise<void> {
   }
 }
 
+function clearLocalTimerState(): void {
+  currentTimer = null
+  stopScreenshotSchedule()
+  updateTrayMenu()
+  broadcast('tracker:timer-updated', null)
+}
+
 async function applyAuth(auth: AuthResponse): Promise<void> {
+  if (currentUserId && currentUserId !== auth.user.id) {
+    clearLocalTimerState()
+  }
+
   accessToken = auth.accessToken
   refreshToken = auth.refreshToken
   currentUserId = auth.user.id
@@ -204,7 +220,11 @@ function isRetryableActionError(error: unknown): boolean {
 
 function optimisticTimerState(action: TimerActionType, occurredAt: string): TimerState {
   const timestamp = new Date(occurredAt)
-  const existing = currentTimer
+  const nextWorkDate = localWorkDate(timestamp)
+  const existing =
+    currentTimer?.userId === currentUserId && currentTimer.workDate === nextWorkDate
+      ? currentTimer
+      : null
   const accumulatedSeconds =
     action === 'STOP' && existing?.activeStartedAt
       ? existing.accumulatedSeconds +
@@ -215,9 +235,9 @@ function optimisticTimerState(action: TimerActionType, occurredAt: string): Time
       : (existing?.accumulatedSeconds ?? 0)
 
   return {
-    id: existing?.id ?? `local-${timestamp.toISOString().slice(0, 10)}`,
+    id: existing?.id ?? `local-${nextWorkDate}`,
     userId: currentUserId ?? existing?.userId ?? 'local',
-    workDate: existing?.workDate ?? timestamp.toISOString().slice(0, 10),
+    workDate: nextWorkDate,
     accumulatedSeconds,
     activeStartedAt: action === 'START' ? occurredAt : null,
     createdAt: existing?.createdAt ?? occurredAt,
@@ -621,6 +641,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('tracker:login', async (_, credentials: { email: string; password: string }) => {
     return cleanIpc(async () => {
+      clearLocalTimerState()
       const response = await api.post<AuthResponse>('/auth/login', {
         ...credentials,
         client: 'desktop'
@@ -685,8 +706,7 @@ app.whenReady().then(() => {
 
     stopScreenshotSchedule()
     stopReconcileSchedule()
-    currentTimer = null
-    updateTrayMenu()
+    clearLocalTimerState()
     await clearStoredAuth()
   })
 

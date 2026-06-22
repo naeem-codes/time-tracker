@@ -33,6 +33,14 @@ function formatDuration(totalSeconds: number): string {
   return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':')
 }
 
+function formatWorkDate(workDate: string): string {
+  return new Intl.DateTimeFormat('en', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric'
+  }).format(new Date(`${workDate}T12:00:00`))
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback
 
@@ -67,7 +75,7 @@ function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    const removeTimerListener = window.tracker.onTimerUpdated(setTimer)
+    const removeTimerListener = window.tracker.onTimerUpdated((nextTimer) => setTimer(nextTimer))
     const removeConnectionListener = window.tracker.onConnectionChanged(setOnline)
     const removeSessionListener = window.tracker.onSessionExpired(() => {
       setTimer(null)
@@ -200,11 +208,7 @@ function App(): React.JSX.Element {
   }
 
   const isRunning = Boolean(timer?.activeStartedAt)
-  const todayLabel = new Intl.DateTimeFormat('en', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric'
-  }).format(new Date())
+  const todayLabel = timer ? formatWorkDate(timer.workDate) : formatWorkDate(new Date().toISOString().slice(0, 10))
 
   return (
     <main className="app-shell tracker-shell">

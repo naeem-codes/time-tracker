@@ -17,7 +17,7 @@ export interface TrackerAPI {
   getToday(): Promise<TimerState>
   start(): Promise<TimerState>
   stop(): Promise<TimerState>
-  onTimerUpdated(callback: (timer: TimerState) => void): () => void
+  onTimerUpdated(callback: (timer: TimerState | null) => void): () => void
   onConnectionChanged(callback: (online: boolean) => void): () => void
   onSessionExpired(callback: () => void): () => void
 }
