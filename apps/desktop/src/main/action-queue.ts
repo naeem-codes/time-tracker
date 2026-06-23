@@ -10,9 +10,11 @@ export interface QueuedTimerAction {
 }
 
 export class TimerActionQueue {
+  readonly path: string
   private readonly database: Database.Database
 
   constructor(path: string) {
+    this.path = path
     this.database = new Database(path)
     this.database.pragma('journal_mode = WAL')
     this.database.exec(`

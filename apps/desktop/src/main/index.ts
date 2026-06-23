@@ -58,6 +58,11 @@ let syncPromise: Promise<void> | null = null
 let inactivityStopPromise: Promise<void> | null = null
 const inactivityThresholdSeconds = 5 * 60
 
+interface StoredSession {
+  userId: string | null
+  refreshToken: string
+}
+
 interface TimerState {
   id: string
   userId: string
@@ -101,34 +106,93 @@ async function cleanIpc<T>(operation: () => Promise<T>, fallback?: string): Prom
   }
 }
 
-function authFilePath(): string {
+function sessionFilePath(): string {
+  return join(app.getPath('userData'), 'auth-session.bin')
+}
+
+function legacyAuthFilePath(): string {
   return join(app.getPath('userData'), 'auth-token.bin')
 }
 
-async function saveRefreshToken(token: string): Promise<void> {
+function trackerQueuePath(userId: string): string {
+  return join(app.getPath('userData'), `tracker-${userId}.sqlite`)
+}
+
+async function saveStoredSession(session: StoredSession): Promise<void> {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('Secure credential storage is unavailable')
   }
 
-  await writeFile(authFilePath(), safeStorage.encryptString(token))
+  await writeFile(sessionFilePath(), safeStorage.encryptString(JSON.stringify(session)))
+
+  try {
+    await unlink(legacyAuthFilePath())
+  } catch {
+    // Legacy auth storage may not exist.
+  }
+}
+
+async function loadStoredSession(): Promise<StoredSession | null> {
+  try {
+    const encryptedSession = await readFile(sessionFilePath())
+    const parsed = JSON.parse(safeStorage.decryptString(encryptedSession)) as StoredSession
+
+    if (!parsed?.refreshToken) {
+      return null
+    }
+
+    return {
+      userId: typeof parsed.userId === 'string' ? parsed.userId : null,
+      refreshToken: parsed.refreshToken
+    }
+  } catch {
+    try {
+      const legacyEncryptedToken = await readFile(legacyAuthFilePath())
+      return {
+        userId: null,
+        refreshToken: safeStorage.decryptString(legacyEncryptedToken)
+      }
+    } catch {
+      return null
+    }
+  }
 }
 
 async function loadRefreshToken(): Promise<string | null> {
-  try {
-    const encryptedToken = await readFile(authFilePath())
-    return safeStorage.decryptString(encryptedToken)
-  } catch {
-    return null
+  const session = await loadStoredSession()
+  return session?.refreshToken ?? null
+}
+
+function deactivateActionQueue(): void {
+  actionQueue?.close()
+  actionQueue = null
+}
+
+function activateActionQueue(userId: string): void {
+  const nextPath = trackerQueuePath(userId)
+
+  if (actionQueue?.path === nextPath) {
+    return
   }
+
+  deactivateActionQueue()
+  actionQueue = new TimerActionQueue(nextPath)
 }
 
 async function clearStoredAuth(): Promise<void> {
   accessToken = null
   refreshToken = null
   currentUserId = null
+  deactivateActionQueue()
 
   try {
-    await unlink(authFilePath())
+    await unlink(sessionFilePath())
+  } catch {
+    // The user may already be logged out.
+  }
+
+  try {
+    await unlink(legacyAuthFilePath())
   } catch {
     // The user may already be logged out.
   }
@@ -150,7 +214,11 @@ async function applyAuth(auth: AuthResponse): Promise<void> {
   accessToken = auth.accessToken
   refreshToken = auth.refreshToken
   currentUserId = auth.user.id
-  await saveRefreshToken(auth.refreshToken)
+  activateActionQueue(auth.user.id)
+  await saveStoredSession({
+    userId: auth.user.id,
+    refreshToken: auth.refreshToken
+  })
 }
 
 async function refreshAuth(): Promise<AuthResponse> {
@@ -583,8 +651,7 @@ async function stopTrackingAndQuit(): Promise<void> {
     } catch (error) {
       console.error('Unable to stop tracking before quitting:', friendlyError(error).message)
     } finally {
-      actionQueue?.close()
-      actionQueue = null
+      deactivateActionQueue()
       canQuit = true
       app.quit()
     }
@@ -685,8 +752,6 @@ app.whenReady().then(() => {
     app.dock.setIcon(icon)
   }
 
-  actionQueue = new TimerActionQueue(join(app.getPath('userData'), 'tracker.sqlite'))
-
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -734,7 +799,8 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('tracker:restore-session', async () => {
-    const storedRefreshToken = refreshToken ?? (await loadRefreshToken())
+    const storedSession = await loadStoredSession()
+    const storedRefreshToken = refreshToken ?? storedSession?.refreshToken ?? null
 
     if (!storedRefreshToken) {
       return null
@@ -749,6 +815,7 @@ app.whenReady().then(() => {
       return { user: auth.user, timer }
     } catch {
       await clearStoredAuth()
+      clearLocalTimerState()
       return null
     }
   })
