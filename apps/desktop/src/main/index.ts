@@ -45,6 +45,7 @@ let refreshPromise: Promise<AuthResponse> | null = null
 let reconcileInterval: NodeJS.Timeout | null = null
 let reconcilePromise: Promise<TimerState> | null = null
 let screenshotInterval: NodeJS.Timeout | null = null
+let inactivityInterval: NodeJS.Timeout | null = null
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let currentTimer: TimerState | null = null
@@ -54,6 +55,8 @@ let quitPromise: Promise<void> | null = null
 let currentUserId: string | null = null
 let actionQueue: TimerActionQueue | null = null
 let syncPromise: Promise<void> | null = null
+let inactivityStopPromise: Promise<void> | null = null
+const inactivityThresholdSeconds = 5 * 60
 
 interface TimerState {
   id: string
@@ -134,6 +137,7 @@ async function clearStoredAuth(): Promise<void> {
 function clearLocalTimerState(): void {
   currentTimer = null
   stopScreenshotSchedule()
+  stopInactivitySchedule()
   updateTrayMenu()
   broadcast('tracker:timer-updated', null)
 }
@@ -419,6 +423,57 @@ function stopScreenshotSchedule(): void {
   }
 }
 
+async function stopTrackingForInactivity(): Promise<void> {
+  if (inactivityStopPromise || !currentTimer?.activeStartedAt) {
+    return
+  }
+
+  inactivityStopPromise = (async () => {
+    try {
+      const timer = await performTimerAction('STOP')
+      const isPending = Boolean(actionQueue?.count(timer.userId))
+
+      showNotification(
+        'Tracking stopped',
+        isPending
+          ? 'You were inactive for 5 minutes. The stop has been saved offline and will sync automatically.'
+          : 'You were inactive for 5 minutes, so tracking was stopped automatically.'
+      )
+    } catch (error) {
+      console.error('Unable to stop tracking for inactivity:', friendlyError(error).message)
+    }
+  })()
+
+  try {
+    await inactivityStopPromise
+  } finally {
+    inactivityStopPromise = null
+  }
+}
+
+function startInactivitySchedule(): void {
+  if (inactivityInterval) {
+    return
+  }
+
+  inactivityInterval = setInterval(() => {
+    if (!currentTimer?.activeStartedAt || inactivityStopPromise) {
+      return
+    }
+
+    if (powerMonitor.getSystemIdleTime() >= inactivityThresholdSeconds) {
+      void stopTrackingForInactivity()
+    }
+  }, 15_000)
+}
+
+function stopInactivitySchedule(): void {
+  if (inactivityInterval) {
+    clearInterval(inactivityInterval)
+    inactivityInterval = null
+  }
+}
+
 function broadcast(channel: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send(channel, payload)
@@ -430,8 +485,10 @@ function updateTrackingSchedule(timer: TimerState): void {
 
   if (timer.activeStartedAt) {
     startScreenshotSchedule()
+    startInactivitySchedule()
   } else {
     stopScreenshotSchedule()
+    stopInactivitySchedule()
   }
 
   updateTrayMenu()
@@ -516,6 +573,7 @@ async function stopTrackingAndQuit(): Promise<void> {
   isQuitting = true
   stopScreenshotSchedule()
   stopReconcileSchedule()
+  stopInactivitySchedule()
 
   quitPromise = (async () => {
     try {
@@ -715,6 +773,9 @@ app.whenReady().then(() => {
 
   powerMonitor.on('suspend', () => {
     stopScreenshotSchedule()
+    if (currentTimer?.activeStartedAt) {
+      void stopTrackingForInactivity()
+    }
   })
 
   powerMonitor.on('resume', () => {
