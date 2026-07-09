@@ -20,6 +20,7 @@ model User {
   workDays      WorkDay[]
   screenshots   Screenshot[]
   refreshTokens RefreshToken[]
+  invitesSent   Invite[]
   createdAt     DateTime       @default(now())
 }
 
@@ -31,6 +32,16 @@ model RefreshToken {
   revokedAt DateTime?
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime  @default(now())
+}
+
+model Invite {
+  id          String   @id @default(uuid())
+  email       String   @unique
+  tokenHash   String   @unique
+  invitedById String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  invitedBy   User     @relation(fields: [invitedById], references: [id], onDelete: Cascade)
 }
 
 model WorkDay {

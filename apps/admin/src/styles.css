@@ -113,6 +113,13 @@ input:focus {
   background: #fdebed;
   font-size: 12px;
 }
+.notice {
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: #19705e;
+  background: #e8f8f1;
+  font-size: 12px;
+}
 
 .layout {
   display: grid;

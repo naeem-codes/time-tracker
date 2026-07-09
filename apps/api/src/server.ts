@@ -16,6 +16,7 @@ import { PrismaClient, Role } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import argon2 from "argon2";
 import { createHash, randomBytes } from "node:crypto";
+import nodemailer from "nodemailer";
 import { z } from "zod";
 
 const app = Fastify({ logger: true });
@@ -23,6 +24,17 @@ const connectionString = process.env.DATABASE_URL;
 const jwtSecret = process.env.JWT_SECRET;
 const awsRegion = process.env.AWS_REGION;
 const screenshotsBucket = process.env.S3_BUCKET_NAME;
+const inviteBaseUrl =
+  process.env.INVITE_BASE_URL ??
+  process.env.ADMIN_ORIGIN ??
+  "http://localhost:5174";
+
+const smtpHost = process.env.SMTP_HOST;
+const smtpPort = Number(process.env.SMTP_PORT ?? 587);
+const smtpSecure = process.env.SMTP_SECURE === "true";
+const smtpUser = process.env.SMTP_USER;
+const smtpPass = process.env.SMTP_PASS;
+const mailFrom = process.env.MAIL_FROM;
 
 if (!connectionString) {
   throw new Error("DATABASE_URL is required");
@@ -35,6 +47,18 @@ if (!jwtSecret) {
 const adapter = new PrismaPg({ connectionString });
 const prisma = new PrismaClient({ adapter });
 const s3 = awsRegion ? new S3Client({ region: awsRegion }) : null;
+const mailer =
+  smtpHost && smtpUser && smtpPass && mailFrom
+    ? nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpSecure,
+        auth: {
+          user: smtpUser,
+          pass: smtpPass,
+        },
+      })
+    : null;
 
 await app.register(sensible);
 await app.register(cors, {
@@ -267,6 +291,7 @@ async function reconcileWorkDay(user: {
 
 const accessTokenExpiresIn = "15m";
 const refreshTokenLifetimeMs = 30 * 24 * 60 * 60 * 1000;
+const inviteLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 type ClientType = "web" | "desktop";
 
 function refreshCookieName(client: ClientType): string {
@@ -275,6 +300,59 @@ function refreshCookieName(client: ClientType): string {
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+async function sendInviteEmail(email: string, token: string): Promise<void> {
+  if (!mailer || !mailFrom) {
+    throw app.httpErrors.failedDependency(
+      "Email delivery is not configured on the server",
+    );
+  }
+
+  const inviteUrl = new URL(inviteBaseUrl);
+  inviteUrl.searchParams.set("invite", token);
+
+  await mailer.sendMail({
+    from: mailFrom,
+    to: email,
+    subject: "You're invited to Next Tracking",
+    text: [
+      "You've been invited to join Next Tracking.",
+      "",
+      `Open this link to set your password and activate your account: ${inviteUrl.toString()}`,
+      "",
+      "This invite expires in 7 days.",
+    ].join("\n"),
+    html: `
+      <p>You've been invited to join <strong>Next Tracking</strong>.</p>
+      <p>
+        <a href="${inviteUrl.toString()}">Open your invite</a>
+        to set your password and activate your account.
+      </p>
+      <p>This invite expires in 7 days.</p>
+    `,
+  });
+}
+
+async function getValidInviteByToken(token: string) {
+  const invite = await prisma.invite.findUnique({
+    where: { tokenHash: hashToken(token) },
+  });
+
+  if (!invite || invite.expiresAt.getTime() <= Date.now()) {
+    throw app.httpErrors.notFound("Invite is invalid or expired");
+  }
+
+  const existingUser = await prisma.user.findUnique({
+    where: { email: invite.email },
+    select: { id: true },
+  });
+
+  if (existingUser) {
+    throw app.httpErrors.conflict("This invite has already been used");
+  }
+
+  return invite;
 }
 
 function signAccessToken(user: { id: string; role: Role }): string {
@@ -549,6 +627,55 @@ app.post(
     return reply.send(authResponse(user, accessToken, refreshToken));
   },
 );
+
+app.get("/invites/:token", async (request) => {
+  const params = z.object({ token: z.string().min(1) }).parse(request.params);
+  const invite = await getValidInviteByToken(params.token);
+
+  return {
+    email: invite.email,
+    expiresAt: invite.expiresAt,
+  };
+});
+
+app.post("/invites/:token/accept", async (request, reply) => {
+  const params = z.object({ token: z.string().min(1) }).parse(request.params);
+  const body = z
+    .object({
+      password: z.string().min(8),
+      timezone: z.string().min(1),
+      client: z.enum(["web", "desktop"]).default("web"),
+    })
+    .parse(request.body);
+  const invite = await getValidInviteByToken(params.token);
+
+  const user = await prisma.$transaction(async (tx) => {
+    const createdUser = await tx.user.create({
+      data: {
+        email: invite.email,
+        passwordHash: await argon2.hash(body.password),
+        timezone: body.timezone,
+        role: Role.EMPLOYEE,
+      },
+    });
+
+    await tx.invite.delete({
+      where: { id: invite.id },
+    });
+
+    return createdUser;
+  });
+
+  const accessToken = signAccessToken(user);
+  const refreshToken = await issueRefreshToken(user.id);
+
+  if (body.client !== "desktop") {
+    setRefreshCookie(reply, refreshToken, body.client);
+    return reply.send(authResponse(user, accessToken));
+  }
+
+  return reply.send(authResponse(user, accessToken, refreshToken));
+});
 
 app.post("/auth/refresh", async (request, reply) => {
   const body = z
@@ -978,6 +1105,46 @@ app.post(
     return reply.code(201).send(user);
   },
 );
+
+app.post("/admin/invites", { preHandler: authorizeAdmin }, async (request) => {
+  const body = z
+    .object({
+      email: z.string().email(),
+    })
+    .parse(request.body);
+
+  const existingUser = await prisma.user.findUnique({
+    where: { email: body.email },
+    select: { id: true },
+  });
+
+  if (existingUser) {
+    throw app.httpErrors.conflict("A user with this email already exists");
+  }
+
+  const token = randomBytes(32).toString("base64url");
+  const invite = await prisma.invite.upsert({
+    where: { email: body.email },
+    create: {
+      email: body.email,
+      tokenHash: hashToken(token),
+      invitedById: (request as any).user.userId,
+      expiresAt: new Date(Date.now() + inviteLifetimeMs),
+    },
+    update: {
+      tokenHash: hashToken(token),
+      invitedById: (request as any).user.userId,
+      expiresAt: new Date(Date.now() + inviteLifetimeMs),
+    },
+  });
+
+  await sendInviteEmail(body.email, token);
+
+  return {
+    email: invite.email,
+    expiresAt: invite.expiresAt,
+  };
+});
 
 app.get("/admin/time", { preHandler: authorizeAdmin }, async (request) => {
   const query = z

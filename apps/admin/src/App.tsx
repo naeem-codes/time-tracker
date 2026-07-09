@@ -49,6 +49,11 @@ interface AuthResponse {
   user: CurrentUser;
 }
 
+interface InviteInfo {
+  email: string;
+  expiresAt: string;
+}
+
 type DashboardView = "overview" | "screenshots";
 type QuickDateFilter = "today" | "yesterday" | "custom";
 
@@ -91,6 +96,18 @@ function readViewFromUrl(): DashboardView {
 
   const view = new URLSearchParams(window.location.search).get("view");
   return view === "screenshots" ? "screenshots" : "overview";
+}
+
+function readInviteTokenFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("invite");
+}
+
+function clearInviteTokenFromUrl(): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("invite");
+  window.history.replaceState({}, "", url);
 }
 
 function writeViewToUrl(view: DashboardView): void {
@@ -278,6 +295,54 @@ function ScreenshotModal({
         />
       </div>
     </div>
+  );
+}
+
+function InviteAcceptance({
+  invite,
+  loading,
+  error,
+  onSubmit,
+}: {
+  invite: InviteInfo;
+  loading: boolean;
+  error: string;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}): React.JSX.Element {
+  return (
+    <main className="login-page">
+      <section className="login-card">
+        <img src={logo} alt="N" />
+        <span className="eyebrow">Account invite</span>
+        <h1>Set up your account</h1>
+        <p>
+          You were invited as <strong>{invite.email}</strong>. Set your password
+          and timezone to continue.
+        </p>
+        <form onSubmit={(event) => void onSubmit(event)}>
+          <label>
+            Email
+            <input disabled value={invite.email} />
+          </label>
+          <label>
+            Password
+            <input minLength={8} name="password" required type="password" />
+          </label>
+          <label>
+            Timezone
+            <input
+              defaultValue={Intl.DateTimeFormat().resolvedOptions().timeZone}
+              name="timezone"
+              required
+            />
+          </label>
+          <button disabled={loading}>
+            {loading ? "Activating..." : "Activate account"}
+          </button>
+        </form>
+        {error && <p className="error">{error}</p>}
+      </section>
+    </main>
   );
 }
 
@@ -641,6 +706,7 @@ function AdminDashboard({
   const [showCreate, setShowCreate] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   const selectedRow = timeRows.find((row) => row.id === selectedUserId) ?? null;
   const totalTracked = useMemo(
@@ -706,25 +772,26 @@ function AdminDashboard({
     }
   }
 
-  async function createEmployee(
+  async function createInvite(
     event: FormEvent<HTMLFormElement>,
   ): Promise<void> {
     event.preventDefault();
     setLoading(true);
+    setError("");
+    setNotice("");
     const form = new FormData(event.currentTarget);
     try {
-      await apiRequest<User>("/admin/users", {
+      await apiRequest<InviteInfo>("/admin/invites", {
         method: "POST",
         body: JSON.stringify({
           email: form.get("email"),
-          password: form.get("password"),
-          timezone: form.get("timezone"),
         }),
       });
       setShowCreate(false);
+      setNotice("Invite sent successfully.");
       await loadDashboard();
     } catch (caught) {
-      setError(errorMessage(caught, "Unable to create the employee."));
+      setError(errorMessage(caught, "Unable to send the invite."));
     } finally {
       setLoading(false);
     }
@@ -757,7 +824,7 @@ function AdminDashboard({
               onChange={(event) => setDate(event.target.value)}
               type="date"
             />
-            <button onClick={() => setShowCreate(true)}>+ Add employee</button>
+            <button onClick={() => setShowCreate(true)}>+ Invite employee</button>
           </div>
         </header>
 
@@ -783,6 +850,7 @@ function AdminDashboard({
             </article>
           </section>
         )}
+        {notice && <p className="notice">{notice}</p>}
         {error && <p className="error">{error}</p>}
 
         {view === "overview" ? (
@@ -911,30 +979,22 @@ function AdminDashboard({
           <form
             className="modal"
             onClick={(event) => event.stopPropagation()}
-            onSubmit={(event) => void createEmployee(event)}
+            onSubmit={(event) => void createInvite(event)}
           >
             <div>
-              <span className="eyebrow">New account</span>
-              <h2>Add employee</h2>
+              <span className="eyebrow">New invite</span>
+              <h2>Invite employee</h2>
             </div>
             <label>
               Email
               <input name="email" required type="email" />
-            </label>
-            <label>
-              Temporary password
-              <input minLength={8} name="password" required type="password" />
-            </label>
-            <label>
-              Timezone
-              <input defaultValue="Asia/Karachi" name="timezone" required />
             </label>
             <div className="modal-actions">
               <button type="button" onClick={() => setShowCreate(false)}>
                 Cancel
               </button>
               <button disabled={loading} type="submit">
-                {loading ? "Creating..." : "Create employee"}
+                {loading ? "Sending..." : "Send invite"}
               </button>
             </div>
           </form>
@@ -951,15 +1011,42 @@ function App(): React.JSX.Element {
   const [password, setPassword] = useState("password123");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [inviteToken, setInviteToken] = useState<string | null>(() =>
+    readInviteTokenFromUrl(),
+  );
+  const [invite, setInvite] = useState<InviteInfo | null>(null);
 
   useEffect(() => {
     void refreshAccessToken()
       .then(setSession)
-      .finally(() => setRestoring(false));
+      .finally(() => {
+        if (!readInviteTokenFromUrl()) {
+          setRestoring(false);
+        }
+      });
     const expire = (): void => setSession(null);
     window.addEventListener("auth-expired", expire);
     return () => window.removeEventListener("auth-expired", expire);
   }, []);
+
+  useEffect(() => {
+    if (!inviteToken || session) {
+      setRestoring(false);
+      return;
+    }
+
+    setRestoring(true);
+    setError("");
+    void apiRequest<InviteInfo>(`/invites/${inviteToken}`)
+      .then((details) => {
+        setInvite(details);
+      })
+      .catch((caught) => {
+        setInvite(null);
+        setError(errorMessage(caught, "This invite is invalid or expired."));
+      })
+      .finally(() => setRestoring(false));
+  }, [inviteToken, session]);
 
   async function login(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -996,6 +1083,45 @@ function App(): React.JSX.Element {
     setSession(null);
   }
 
+  async function acceptInvite(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+
+    if (!inviteToken) {
+      setError("This invite is invalid or expired.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+
+    try {
+      const response = await fetch(`${API_URL}/invites/${inviteToken}/accept`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          password: form.get("password"),
+          timezone: form.get("timezone"),
+          client: "web",
+        }),
+      });
+      const body = (await response.json()) as AuthResponse & {
+        message?: string;
+      };
+      if (!response.ok) throw new Error(body.message ?? "Unable to accept invite");
+      accessToken = body.accessToken;
+      setSession(body);
+      setInvite(null);
+      setInviteToken(null);
+      clearInviteTokenFromUrl();
+    } catch (caught) {
+      setError(errorMessage(caught, "Unable to accept the invite."));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   if (restoring) {
     return (
       <main className="login-page">
@@ -1009,6 +1135,17 @@ function App(): React.JSX.Element {
   }
 
   if (!session) {
+    if (inviteToken && invite) {
+      return (
+        <InviteAcceptance
+          error={error}
+          invite={invite}
+          loading={loading}
+          onSubmit={acceptInvite}
+        />
+      );
+    }
+
     return (
       <main className="login-page">
         <section className="login-card">
