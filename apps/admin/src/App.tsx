@@ -40,6 +40,7 @@ interface WorkDay {
 interface TimeRow extends CurrentUser {
   totalSeconds: number;
   isActive: boolean;
+  currentWorkDate: string;
   workDay: WorkDay | null;
 }
 
@@ -717,7 +718,9 @@ function AdminDashboard({
   async function loadDashboard(): Promise<void> {
     const [nextUsers, nextRows] = await Promise.all([
       apiRequest<User[]>("/admin/users"),
-      apiRequest<TimeRow[]>(`/admin/time?date=${date}`),
+      apiRequest<TimeRow[]>(
+        view === "overview" ? "/admin/time/current" : `/admin/time?date=${date}`,
+      ),
     ]);
     setUsers(nextUsers);
     setTimeRows(nextRows);
@@ -731,7 +734,7 @@ function AdminDashboard({
         setError(errorMessage(caught, "Unable to load the dashboard.")),
       )
       .finally(() => setLoading(false));
-  }, [date]);
+  }, [date, view]);
 
   useEffect(() => {
     if (!selectedUserId) {
@@ -819,11 +822,13 @@ function AdminDashboard({
             </p>
           </div>
           <div className="header-actions">
-            <input
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
-              type="date"
-            />
+            {view === "screenshots" && (
+              <input
+                value={date}
+                onChange={(event) => setDate(event.target.value)}
+                type="date"
+              />
+            )}
             <button onClick={() => setShowCreate(true)}>+ Invite employee</button>
           </div>
         </header>
@@ -846,7 +851,7 @@ function AdminDashboard({
             <article>
               <span>Total time</span>
               <strong>{formatDuration(totalTracked)}</strong>
-              <small>Across the selected day</small>
+              <small>Across each employee&apos;s current local day</small>
             </article>
           </section>
         )}
@@ -879,7 +884,7 @@ function AdminDashboard({
                       <b>{row.email[0].toUpperCase()}</b>
                       <span>
                         <strong>{row.email}</strong>
-                        <small>{row.timezone}</small>
+                        <small>{row.timezone} · {friendlyDate(row.currentWorkDate)}</small>
                       </span>
                     </span>
                     <span className={`status ${row.isActive ? "active" : ""}`}>

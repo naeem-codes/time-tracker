@@ -1178,11 +1178,48 @@ app.get("/admin/time", { preHandler: authorizeAdmin }, async (request) => {
 
     return {
       ...user,
+      currentWorkDate: query.date,
       workDay,
       totalSeconds: workDay ? totalSeconds(workDay) : 0,
       isActive: Boolean(workDay?.activeStartedAt),
     };
   });
+});
+
+app.get("/admin/time/current", { preHandler: authorizeAdmin }, async () => {
+  const users = await prisma.user.findMany({
+    where: { role: Role.EMPLOYEE },
+    orderBy: { email: "asc" },
+    select: {
+      id: true,
+      email: true,
+      timezone: true,
+    },
+  });
+
+  const rows = await Promise.all(
+    users.map(async (user) => {
+      const workDate = currentWorkDate(user.timezone);
+      const workDay = await prisma.workDay.findUnique({
+        where: {
+          userId_workDate: {
+            userId: user.id,
+            workDate,
+          },
+        },
+      });
+
+      return {
+        ...user,
+        currentWorkDate: workDate,
+        workDay,
+        totalSeconds: workDay ? totalSeconds(workDay) : 0,
+        isActive: Boolean(workDay?.activeStartedAt),
+      };
+    }),
+  );
+
+  return rows;
 });
 
 app.get(
