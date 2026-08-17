@@ -1,0 +1,42 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || '22' }}
+          script: |
+            set -eu
+
+            APP_DIR="/home/ubuntu/time-tracker"
+            WEB_ROOT="/var/www/next-tracking"
+
+            cd "$APP_DIR"
+            git fetch origin main
+            git reset --hard origin/main
+
+            pnpm install --frozen-lockfile --filter api --filter admin
+            pnpm --filter api exec prisma generate
+            pnpm --filter api exec prisma migrate deploy
+            pnpm --filter api build
+            pnpm --filter admin build
+
+            sudo mkdir -p "$WEB_ROOT"
+            sudo rsync -a --delete apps/admin/dist/ "$WEB_ROOT/"
+
+            pm2 startOrReload ecosystem.config.cjs --env production
+            pm2 save
+
+            sudo systemctl reload nginx
